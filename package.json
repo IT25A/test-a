@@ -1,0 +1,17 @@
+{
+  "name": "test-a",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node --test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "http://localhost:26831/IT25A/test-a"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
