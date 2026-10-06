@@ -63,8 +63,12 @@ jobs:
           else
             TAG="main"
           fi
-          IMAGE_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$TAG"
-          echo "IMAGE_TAG=$(echo $IMAGE_TAG \vert{} tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+          
+          # Erstellen des Image-Tags
+          RAW_TAG="${{ env.REGISTRY }}/${{ github.repository }}:$TAG"
+          
+          # Native Bash Parameter Expansion: ,, wandelt alles verlässlich in Kleinbuchstaben um
+          echo "IMAGE_TAG=${RAW_TAG,,}" >> $GITHUB_OUTPUT
 
       - name: Build and Push Docker Image to GHCR
         uses: docker/build-push-action@v5
