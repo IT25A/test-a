@@ -4,6 +4,7 @@ services:
     restart: unless-stopped
     environment:
       - PORT=${PORT:-3000}
+      - MESSAGE_SUFFIX=${MESSAGE_SUFFIX}
     labels:
       caddy: "http://${FQDN}"
       caddy.reverse_proxy: "web:${PORT:-3000}"
