@@ -85,31 +85,31 @@ jobs:
             PR_NUM="${{ github.event.number }}"
           fi
 
-          # 1. GitHub Variables (vars.*) & Secrets zusammenfügen
+          # 1. Variables & Secrets sammeln
           VARS_JSON=$(echo '${{ toJson(vars) }}')
           SECRETS_JSON=$(jq -n \
+            --arg db_pass "${{ secrets.DB_PASSWORD }}" \
             --arg api_key "${{ secrets.API_KEY }}" \
-            '{API_KEY: $api_key}')
+            '{DB_PASSWORD: $db_pass, API_KEY: $api_key}')
 
           ENV_JSON=$(jq -s '.[0] * .[1]' <(echo "$VARS_JSON") <(echo "$SECRETS_JSON"))
-          COMPOSE_CONTENT=$(jq -sR . docker-compose.yml)
 
-          # 2. Payload bauen
+          # 2. Payload mit --rawfile direkt aus der docker-compose.yml bauen (ohne Doppelescaping)
           PAYLOAD=$(jq -n \
+            --rawfile compose docker-compose.yml \
             --arg tag "${{ steps.meta.outputs.IMAGE_TAG }}" \
-            --arg compose "$COMPOSE_CONTENT" \
             --arg pr "$PR_NUM" \
             --argjson env "$ENV_JSON" \
-            '{image_tag: $tag, compose_yaml:$compose, pr_number: $pr, env_vars:$env}')
+            '{image_tag: $tag, compose_yaml: $compose, pr_number: $pr, env_vars: $env}')
 
-          # 3. Request mit OIDC JWT Bearer Token absenden
+          # 3. Request mit OIDC Bearer Token absenden
           RESPONSE=$(curl -s -X POST https://cd.it25a.de/deploy \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${{ steps.oidc.outputs.TOKEN }}" \
             -d "$PAYLOAD")
 
           echo "Response: $RESPONSE"
-          URL=$(echo$RESPONSE | jq -r '.url')
+          URL=$(echo $RESPONSE | jq -r '.url')
           echo "DEPLOY_URL=$URL" >> $GITHUB_OUTPUT
 
       - name: Comment PR with Preview Link
