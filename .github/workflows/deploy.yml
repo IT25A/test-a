@@ -1,0 +1,122 @@
+name: CI/CD Build & Deploy
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    types: [ opened, synchronize, closed ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write  # ERFORDERLICH für den signierten GitHub JWT-Token!
+
+jobs:
+  cleanup:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get GitHub JWT Token
+        id: oidc
+        run: |
+          TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=it25a-deployer" | jq -r '.value')
+          echo "TOKEN=$TOKEN" >> $GITHUB_OUTPUT
+
+      - name: Trigger Cleanup
+        run: |
+          curl -X POST https://cd.it25a.de/cleanup \
+            -H "Authorization: Bearer ${{ steps.oidc.outputs.TOKEN }}" \
+            -d "pr_number=${{ github.event.number }}"
+
+  build-and-deploy:
+    if: github.event_name != 'pull_request' || github.event.action != 'closed'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get GitHub JWT Token
+        id: oidc
+        run: |
+          TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=it25a-deployer" | jq -r '.value')
+          echo "TOKEN=$TOKEN" >> $GITHUB_OUTPUT
+
+      - name: Set Tag Name
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            TAG="pr-${{ github.event.number }}"
+          else
+            TAG="main"
+          fi
+          IMAGE_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$TAG"
+          echo "IMAGE_TAG=$(echo $IMAGE_TAG \vert{} tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+      - name: Build and Push Docker Image to GHCR
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.IMAGE_TAG }}
+
+      - name: Trigger Home Lab Deploy
+        id: deploy
+        run: |
+          PR_NUM=""
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            PR_NUM="${{ github.event.number }}"
+          fi
+
+          # 1. GitHub Variables (vars.*) & Secrets zusammenfügen
+          VARS_JSON=$(echo '${{ toJson(vars) }}')
+          SECRETS_JSON=$(jq -n \
+            --arg api_key "${{ secrets.API_KEY }}" \
+            '{API_KEY: $api_key}')
+
+          ENV_JSON=$(jq -s '.[0] * .[1]' <(echo "$VARS_JSON") <(echo "$SECRETS_JSON"))
+          COMPOSE_CONTENT=$(jq -sR . docker-compose.yml)
+
+          # 2. Payload bauen
+          PAYLOAD=$(jq -n \
+            --arg tag "${{ steps.meta.outputs.IMAGE_TAG }}" \
+            --arg compose "$COMPOSE_CONTENT" \
+            --arg pr "$PR_NUM" \
+            --argjson env "$ENV_JSON" \
+            '{image_tag: $tag, compose_yaml:$compose, pr_number: $pr, env_vars:$env}')
+
+          # 3. Request mit OIDC JWT Bearer Token absenden
+          RESPONSE=$(curl -s -X POST https://cd.it25a.de/deploy \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${{ steps.oidc.outputs.TOKEN }}" \
+            -d "$PAYLOAD")
+
+          echo "Response: $RESPONSE"
+          URL=$(echo$RESPONSE | jq -r '.url')
+          echo "DEPLOY_URL=$URL" >> $GITHUB_OUTPUT
+
+      - name: Comment PR with Preview Link
+        if: github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'synchronize')
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const url = "${{ steps.deploy.outputs.DEPLOY_URL }}";
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `🚀 **Preview Environment deployed!**\n\n🔍 Live Preview: [${url}](${url})`
+            });
