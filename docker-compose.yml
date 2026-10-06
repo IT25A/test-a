@@ -5,8 +5,8 @@ services:
     environment:
       - PORT=${PORT:-3000}
     labels:
-      caddy: "http://"
-      caddy.caddyfile: "http://${FQDN} {\n  reverse_proxy web:${PORT:-3000}\n}"
+      caddy: "http://${FQDN}"
+      caddy.reverse_proxy: "web:${PORT:-3000}"
     networks:
       - default
       - caddy_net
