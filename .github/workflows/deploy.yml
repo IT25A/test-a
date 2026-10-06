@@ -14,6 +14,8 @@ permissions:
   contents: read
   packages: write
   id-token: write  # ERFORDERLICH für den signierten GitHub JWT-Token!
+  pull-requests: write # ERFORDERLICH für PR-Kommentare
+  issues: write        # ERFORDERLICH für PR-Kommentare
 
 jobs:
   cleanup:
@@ -88,9 +90,8 @@ jobs:
           # 1. Variables & Secrets sammeln
           VARS_JSON=$(echo '${{ toJson(vars) }}')
           SECRETS_JSON=$(jq -n \
-            --arg db_pass "${{ secrets.DB_PASSWORD }}" \
             --arg api_key "${{ secrets.API_KEY }}" \
-            '{DB_PASSWORD: $db_pass, API_KEY: $api_key}')
+            '{API_KEY: $api_key}')
 
           ENV_JSON=$(jq -s '.[0] * .[1]' <(echo "$VARS_JSON") <(echo "$SECRETS_JSON"))
 
