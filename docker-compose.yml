@@ -7,7 +7,7 @@ services:
       - MESSAGE_SUFFIX=${MESSAGE_SUFFIX}
     labels:
       caddy: "http://${FQDN}"
-      caddy.reverse_proxy: "web:${PORT:-3000}"
+      caddy.reverse_proxy: "{{upstreams ${PORT:-3000}}}"
     networks:
       - default
       - caddy_net
