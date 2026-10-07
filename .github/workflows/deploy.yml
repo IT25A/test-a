@@ -13,11 +13,12 @@ env:
 permissions:
   contents: read
   packages: write
-  id-token: write  # ERFORDERLICH für den signierten GitHub JWT-Token!
-  pull-requests: write # ERFORDERLICH für PR-Kommentare
-  issues: write        # ERFORDERLICH für PR-Kommentare
+  id-token: write
+  pull-requests: write
+  issues: write
 
 jobs:
+  # JOB 1: Wird NUR ausgeführt, wenn ein PR geschlossen/gemergt wird
   cleanup:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
     runs-on: ubuntu-latest
@@ -31,10 +32,23 @@ jobs:
 
       - name: Trigger Cleanup
         run: |
-          curl -X POST https://cd.it25a.de/cleanup \
+          PAYLOAD=$(jq -n --arg pr "${{ github.event.number }}" '{pr_number: $pr}')
+          
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST https://cd.it25a.de/cleanup \
+            -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${{ steps.oidc.outputs.TOKEN }}" \
-            -d "pr_number=${{ github.event.number }}"
+            -d "$PAYLOAD")
 
+          HTTP_STATUS=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" \vert{} sed '$d')
+
+          echo "Response ($HTTP_STATUS):$BODY"
+          if [ "$HTTP_STATUS" -ne 200 ]; then
+            echo "Fehler beim Bereinigen der PR-Umgebung!"
+            exit 1
+          fi
+
+  # JOB 2: Build & Deploy für Main-Pushes sowie neu geöffnete/aktualisierte PRs
   build-and-deploy:
     if: github.event_name != 'pull_request' || github.event.action != 'closed'
     runs-on: ubuntu-latest
@@ -66,10 +80,7 @@ jobs:
             TAG="main"
           fi
           
-          # Erstellen des Image-Tags
           RAW_TAG="${{ env.REGISTRY }}/${{ github.repository }}:$TAG"
-          
-          # Native Bash Parameter Expansion: ,, wandelt alles verlässlich in Kleinbuchstaben um
           echo "IMAGE_TAG=${RAW_TAG,,}" >> $GITHUB_OUTPUT
 
       - name: Build and Push Docker Image to GHCR
@@ -95,22 +106,31 @@ jobs:
 
           ENV_JSON=$(jq -s '.[0] * .[1]' <(echo "$VARS_JSON") <(echo "$SECRETS_JSON"))
 
-          # 2. Payload mit --rawfile direkt aus der docker-compose.yml bauen (ohne Doppelescaping)
+          # 2. Payload bauen
           PAYLOAD=$(jq -n \
             --rawfile compose docker-compose.yml \
             --arg tag "${{ steps.meta.outputs.IMAGE_TAG }}" \
             --arg pr "$PR_NUM" \
             --argjson env "$ENV_JSON" \
-            '{image_tag: $tag, compose_yaml: $compose, pr_number: $pr, env_vars: $env}')
+            '{image_tag: $tag, compose_yaml:$compose, pr_number: $pr, env_vars:$env}')
 
-          # 3. Request mit OIDC Bearer Token absenden
-          RESPONSE=$(curl -s -X POST https://cd.it25a.de/deploy \
+          # 3. Deploy-Request absenden
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST https://cd.it25a.de/deploy \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${{ steps.oidc.outputs.TOKEN }}" \
             -d "$PAYLOAD")
 
-          echo "Response: $RESPONSE"
-          URL=$(echo $RESPONSE | jq -r '.url')
+          HTTP_STATUS=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" \vert{} sed '$d')
+
+          echo "Response ($HTTP_STATUS):$BODY"
+          if [ "$HTTP_STATUS" -ne 200 ]; then
+            echo "Deployment fehlgeschlagen!"
+            echo "$BODY"
+            exit 1
+          fi
+
+          URL=$(echo "$BODY" | jq -r '.url')
           echo "DEPLOY_URL=$URL" >> $GITHUB_OUTPUT
 
       - name: Comment PR with Preview Link
