@@ -49,6 +49,32 @@ jobs:
             exit 1
           fi
 
+      - name: Delete Preview Comment on PR Close
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const header = "<!-- gh-preview-comment -->";
+            
+            // 1. Alle Kommentare des PRs abrufen
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            // 2. Unseren speziellen Preview-Kommentar suchen
+            const botComment = comments.find(c => c.body && c.body.includes(header));
+
+            // 3. Falls vorhanden, löschen
+            if (botComment) {
+              await github.rest.issues.deleteComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+              });
+              console.log(`Preview-Kommentar (ID: ${botComment.id}) erfolgreich entfernt.`);
+            }
+
   # JOB 2: Build & Deploy für Main-Pushes sowie neu geöffnete/aktualisierte PRs
   build-and-deploy:
     if: github.event_name != 'pull_request' || github.event.action != 'closed'
@@ -115,7 +141,7 @@ jobs:
             --argjson env "$ENV_JSON" \
             '{image_tag: $tag, compose_yaml:$compose, pr_number: $pr, env_vars:$env}')
 
-          # 3. Deploy-Request absenden: JSON-Response in Datei schreiben & Statuscode erfassen
+          # 3. Deploy-Request absenden
           HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" -X POST https://cd.it25a.de/deploy \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${{ steps.oidc.outputs.TOKEN }}" \
@@ -131,19 +157,46 @@ jobs:
             exit 1
           fi
 
-          # 4. URL sauber aus der gespeicherten JSON-Datei auslesen
+          # 4. URL auslesen
           URL=$(jq -r '.url' response.json)
           echo "DEPLOY_URL=$URL" >> $GITHUB_OUTPUT
 
-      - name: Comment PR with Preview Link
+      - name: Create or Update PR Preview Link Comment
         if: github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'synchronize')
         uses: actions/github-script@v7
         with:
           script: |
+            const header = "<!-- gh-preview-comment -->";
             const url = "${{ steps.deploy.outputs.DEPLOY_URL }}";
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
+            const commitSha = context.sha.substring(0, 7);
+            
+            const body = `${header}\n🚀 **Preview Environment deployed!**\n\n🔍 **Live Preview:** [${url}](${url})\n\n_Aktualisiert für Commit \`${commitSha}\`_`;
+
+            // 1. Alle Kommentare abrufen
+            const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `🚀 **Preview Environment deployed!**\n\n🔍 Live Preview: [${url}](${url})`
+              issue_number: context.issue.number,
             });
+
+            // 2. Bestehenden Kommentar suchen
+            const botComment = comments.find(c => c.body && c.body.includes(header));
+
+            // 3. Update oder Create
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body
+              });
+              console.log(`Preview-Kommentar (ID: ${botComment.id}) erfolgreich aktualisiert.`);
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body
+              });
+              console.log("Neuer Preview-Kommentar erfolgreich erstellt.");
+            }
