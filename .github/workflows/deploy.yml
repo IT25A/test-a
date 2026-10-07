@@ -13,9 +13,8 @@ env:
 permissions:
   contents: read
   packages: write
-  id-token: write        # ERFORDERLICH für den signierten GitHub JWT-Token!
-  deployments: write     # ERFORDERLICH für GitHub Environments & Deployment Status API!
-  administration: write  # ERFORDERLICH zum endgültigen Löschen von Environments!
+  id-token: write    # ERFORDERLICH für den signierten GitHub JWT-Token!
+  deployments: write # ERFORDERLICH für GitHub Environments & Deployment Status API!
 
 jobs:
   # JOB 1: Wird NUR ausgeführt, wenn ein PR geschlossen/gemergt wird
@@ -55,41 +54,41 @@ jobs:
           script: |
             const envName = `preview-pr-${context.issue.number}`;
 
-            // 1. Alle Deployments für diese PR-Umgebung abrufen (max. 100)
-            const { data: deployments } = await github.rest.repos.listDeployments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              environment: envName,
-              per_page: 100,
-            });
-
-            // 2. Jedes Deployment zuerst auf 'inactive' setzen und dann löschen
-            for (const deployment of deployments) {
-              try {
-                await github.rest.repos.createDeploymentStatus({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  deployment_id: deployment.id,
-                  state: 'inactive',
-                  description: 'PR closed and preview environment destroyed',
-                });
-
-                await github.rest.repos.deleteDeployment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  deployment_id: deployment.id,
-                });
-                console.log(`Deployment ID ${deployment.id} gelöscht.`);
-              } catch (e) {
-                console.log(`Hinweis beim Löschen von Deployment ${deployment.id}: ${e.message}`);
-              }
-            }
-
-            // 3. 2 Sekunden warten, damit die GitHub-API den Status im Backend verarbeitet
-            await new Promise(resolve => setTimeout(resolve, 2000));
-
-            // 4. Das eigentliche Environment vollständig löschen
             try {
+              // 1. Alle Deployments für diese PR-Umgebung abrufen (max. 100)
+              const { data: deployments } = await github.rest.repos.listDeployments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                environment: envName,
+                per_page: 100,
+              });
+
+              // 2. Jedes Deployment zuerst auf 'inactive' setzen und dann löschen
+              for (const deployment of deployments) {
+                try {
+                  await github.rest.repos.createDeploymentStatus({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    deployment_id: deployment.id,
+                    state: 'inactive',
+                    description: 'PR closed and preview environment destroyed',
+                  });
+
+                  await github.rest.repos.deleteDeployment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    deployment_id: deployment.id,
+                  });
+                  console.log(`Deployment ID ${deployment.id} gelöscht.`);
+                } catch (e) {
+                  console.log(`Hinweis beim Löschen von Deployment ${deployment.id}: ${e.message}`);
+                }
+              }
+
+              // 3. Kurz warten, damit GitHub das Deaktivieren im Backend verarbeitet
+              await new Promise(resolve => setTimeout(resolve, 2000));
+
+              // 4. Das Environment selbst löschen
               await github.rest.repos.deleteAnEnvironment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -97,8 +96,7 @@ jobs:
               });
               console.log(`Environment '${envName}' erfolgreich vollständig gelöscht.`);
             } catch (e) {
-              console.error(`Fehler beim Löschen des Environments '${envName}': ${e.message}`);
-              throw e;
+              console.log(`Hinweis zum Environment '${envName}': ${e.message}`);
             }
 
   # JOB 2: Build & Deploy für Main-Pushes sowie neu geöffnete/aktualisierte PRs
