@@ -13,9 +13,9 @@ env:
 permissions:
   contents: read
   packages: write
-  id-token: write
-  pull-requests: write
-  issues: write
+  id-token: write      # ERFORDERLICH für den signierten GitHub JWT-Token!
+  pull-requests: write # ERFORDERLICH für PR-Kommentare
+  issues: write        # ERFORDERLICH für PR-Kommentare
 
 jobs:
   # JOB 1: Wird NUR ausgeführt, wenn ein PR geschlossen/gemergt wird
@@ -34,15 +34,16 @@ jobs:
         run: |
           PAYLOAD=$(jq -n --arg pr "${{ github.event.number }}" '{pr_number: $pr}')
           
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST https://cd.it25a.de/cleanup \
+          HTTP_STATUS=$(curl -s -o cleanup_response.json -w "%{http_code}" -X POST https://cd.it25a.de/cleanup \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${{ steps.oidc.outputs.TOKEN }}" \
             -d "$PAYLOAD")
 
-          HTTP_STATUS=$(echo "$RESPONSE" | tail -n1)
-          BODY=$(echo "$RESPONSE" \vert{} sed '$d')
+          echo "Response HTTP Status: $HTTP_STATUS"
+          echo "Response Body:"
+          cat cleanup_response.json
+          echo ""
 
-          echo "Response ($HTTP_STATUS):$BODY"
           if [ "$HTTP_STATUS" -ne 200 ]; then
             echo "Fehler beim Bereinigen der PR-Umgebung!"
             exit 1
@@ -114,23 +115,24 @@ jobs:
             --argjson env "$ENV_JSON" \
             '{image_tag: $tag, compose_yaml:$compose, pr_number: $pr, env_vars:$env}')
 
-          # 3. Deploy-Request absenden
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST https://cd.it25a.de/deploy \
+          # 3. Deploy-Request absenden: JSON-Response in Datei schreiben & Statuscode erfassen
+          HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" -X POST https://cd.it25a.de/deploy \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${{ steps.oidc.outputs.TOKEN }}" \
             -d "$PAYLOAD")
 
-          HTTP_STATUS=$(echo "$RESPONSE" | tail -n1)
-          BODY=$(echo "$RESPONSE" \vert{} sed '$d')
+          echo "Response HTTP Status: $HTTP_STATUS"
+          echo "Response Body:"
+          cat response.json
+          echo ""
 
-          echo "Response ($HTTP_STATUS):$BODY"
           if [ "$HTTP_STATUS" -ne 200 ]; then
             echo "Deployment fehlgeschlagen!"
-            echo "$BODY"
             exit 1
           fi
 
-          URL=$(echo "$BODY" | jq -r '.url')
+          # 4. URL sauber aus der gespeicherten JSON-Datei auslesen
+          URL=$(jq -r '.url' response.json)
           echo "DEPLOY_URL=$URL" >> $GITHUB_OUTPUT
 
       - name: Comment PR with Preview Link
