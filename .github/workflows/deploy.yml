@@ -13,8 +13,9 @@ env:
 permissions:
   contents: read
   packages: write
-  id-token: write    # ERFORDERLICH für den signierten GitHub JWT-Token!
-  deployments: write # ERFORDERLICH für GitHub Environments & Deployment Status API!
+  id-token: write        # ERFORDERLICH für den signierten GitHub JWT-Token!
+  deployments: write     # ERFORDERLICH für GitHub Environments & Deployment Status API!
+  administration: write  # ERFORDERLICH zum endgültigen Löschen von Environments!
 
 jobs:
   # JOB 1: Wird NUR ausgeführt, wenn ein PR geschlossen/gemergt wird
@@ -54,17 +55,17 @@ jobs:
           script: |
             const envName = `preview-pr-${context.issue.number}`;
 
-            try {
-              // 1. Alle Deployments für diese PR-Umgebung abrufen
-              const { data: deployments } = await github.rest.repos.listDeployments({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                environment: envName,
-              });
+            // 1. Alle Deployments für diese PR-Umgebung abrufen (max. 100)
+            const { data: deployments } = await github.rest.repos.listDeployments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              environment: envName,
+              per_page: 100,
+            });
 
-              // 2. Jedes Deployment deaktivieren und anschließend löschen
-              for (const deployment of deployments) {
-                // Schritt 2a: Auf inactive setzen (Voraussetzung der GitHub API)
+            // 2. Jedes Deployment zuerst auf 'inactive' setzen und dann löschen
+            for (const deployment of deployments) {
+              try {
                 await github.rest.repos.createDeploymentStatus({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
@@ -73,24 +74,31 @@ jobs:
                   description: 'PR closed and preview environment destroyed',
                 });
 
-                // Schritt 2b: Deployment-Record löschen
                 await github.rest.repos.deleteDeployment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   deployment_id: deployment.id,
                 });
+                console.log(`Deployment ID ${deployment.id} gelöscht.`);
+              } catch (e) {
+                console.log(`Hinweis beim Löschen von Deployment ${deployment.id}: ${e.message}`);
               }
+            }
 
-              // 3. Environment selbst aus dem Repo-Dashboard entfernen
+            // 3. 2 Sekunden warten, damit die GitHub-API den Status im Backend verarbeitet
+            await new Promise(resolve => setTimeout(resolve, 2000));
+
+            // 4. Das eigentliche Environment vollständig löschen
+            try {
               await github.rest.repos.deleteAnEnvironment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 environment_name: envName,
               });
-
-              console.log(`Environment '${envName}' und zugehörige Deployments wurden spurlos gelöscht.`);
-            } catch (error) {
-              console.log(`Hinweis beim Entfernen des Environments '${envName}': ${error.message}`);
+              console.log(`Environment '${envName}' erfolgreich vollständig gelöscht.`);
+            } catch (e) {
+              console.error(`Fehler beim Löschen des Environments '${envName}': ${e.message}`);
+              throw e;
             }
 
   # JOB 2: Build & Deploy für Main-Pushes sowie neu geöffnete/aktualisierte PRs
@@ -98,7 +106,7 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.action != 'closed'
     runs-on: ubuntu-latest
 
-    # Native GitHub Environments Integration (erzeugt den "View deployment"-Button)
+    # Native GitHub Environments Integration
     environment:
       name: ${{ github.event_name == 'pull_request' && format('preview-pr-{0}', github.event.number) || 'production' }}
       url: ${{ steps.deploy.outputs.DEPLOY_URL }}
