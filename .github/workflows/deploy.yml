@@ -48,30 +48,50 @@ jobs:
             exit 1
           fi
 
-      - name: Deactivate GitHub Environment Deployment
+      - name: Delete GitHub Environment and Deployments
         uses: actions/github-script@v7
         with:
           script: |
             const envName = `preview-pr-${context.issue.number}`;
 
-            // 1. Alle Deployments für diese PR-Umgebung suchen
-            const { data: deployments } = await github.rest.repos.listDeployments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              environment: envName,
-            });
-
-            // 2. Jedes Deployment auf 'inactive' setzen
-            for (const deployment of deployments) {
-              await github.rest.repos.createDeploymentStatus({
+            try {
+              // 1. Alle Deployments für diese PR-Umgebung abrufen
+              const { data: deployments } = await github.rest.repos.listDeployments({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                deployment_id: deployment.id,
-                state: 'inactive',
-                description: 'PR closed and preview environment destroyed',
+                environment: envName,
               });
+
+              // 2. Jedes Deployment deaktivieren und anschließend löschen
+              for (const deployment of deployments) {
+                // Schritt 2a: Auf inactive setzen (Voraussetzung der GitHub API)
+                await github.rest.repos.createDeploymentStatus({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  deployment_id: deployment.id,
+                  state: 'inactive',
+                  description: 'PR closed and preview environment destroyed',
+                });
+
+                // Schritt 2b: Deployment-Record löschen
+                await github.rest.repos.deleteDeployment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  deployment_id: deployment.id,
+                });
+              }
+
+              // 3. Environment selbst aus dem Repo-Dashboard entfernen
+              await github.rest.repos.deleteAnEnvironment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                environment_name: envName,
+              });
+
+              console.log(`Environment '${envName}' und zugehörige Deployments wurden spurlos gelöscht.`);
+            } catch (error) {
+              console.log(`Hinweis beim Entfernen des Environments '${envName}': ${error.message}`);
             }
-            console.log(`Deployments für Environment '${envName}' erfolgreich auf 'inactive' gesetzt.`);
 
   # JOB 2: Build & Deploy für Main-Pushes sowie neu geöffnete/aktualisierte PRs
   build-and-deploy:
