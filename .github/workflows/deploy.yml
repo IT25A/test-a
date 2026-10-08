@@ -178,3 +178,41 @@ jobs:
           # 4. URL auslesen
           URL=$(jq -r '.url' response.json)
           echo "DEPLOY_URL=$URL" >> $GITHUB_OUTPUT
+
+      - name: Inactivate Older Production Deployments
+        if: github.event_name == 'push'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              // 1. Alle Deployments der 'production'-Umgebung abrufen
+              const { data: deployments } = await github.rest.repos.listDeployments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                environment: 'production',
+                per_page: 100,
+              });
+
+              // 2. Absteigend nach ID sortieren (neuestes zuerst)
+              deployments.sort((a, b) => b.id - a.id);
+
+              // 3. Erstes (neuestes) Deployment aktiv lassen, alle älteren deaktivieren
+              const olderDeployments = deployments.slice(1);
+
+              for (const deployment of olderDeployments) {
+                try {
+                  await github.rest.repos.createDeploymentStatus({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    deployment_id: deployment.id,
+                    state: 'inactive',
+                    description: 'Superseded by newer production deployment',
+                  });
+                  console.log(`Älteres Production-Deployment ID ${deployment.id} auf 'inactive' gesetzt.`);
+                } catch (e) {
+                  console.log(`Hinweis bei Deployment ID ${deployment.id}: ${e.message}`);
+                }
+              }
+            } catch (e) {
+              console.log(`Fehler beim Aktualisieren der Production-Deployments: ${e.message}`);
+            }
