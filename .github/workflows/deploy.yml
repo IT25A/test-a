@@ -48,6 +48,52 @@ jobs:
             exit 1
           fi
 
+      - name: Deactivate and Delete GitHub Deployment for PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prRef = context.payload.pull_request.head.ref;
+            const prSha = context.payload.pull_request.head.sha;
+
+            try {
+              // 1. Alle Deployments der 'preview'-Umgebung abrufen
+              const { data: deployments } = await github.rest.repos.listDeployments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                environment: 'preview',
+                per_page: 100,
+              });
+
+              // 2. Deployments filtern, die zu diesem PR gehören (Match auf Ref oder SHA)
+              const prDeployments = deployments.filter(
+                d => d.ref === prRef || d.sha === prSha
+              );
+
+              // 3. Jedes gefundene Deployment auf 'inactive' setzen und danach löschen
+              for (const deployment of prDeployments) {
+                try {
+                  await github.rest.repos.createDeploymentStatus({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    deployment_id: deployment.id,
+                    state: 'inactive',
+                    description: 'PR closed and preview deployment removed',
+                  });
+
+                  await github.rest.repos.deleteDeployment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    deployment_id: deployment.id,
+                  });
+                  console.log(`Deployment ID ${deployment.id} erfolgreich gelöscht.`);
+                } catch (e) {
+                  console.log(`Hinweis beim Löschen von Deployment ${deployment.id}: ${e.message}`);
+                }
+              }
+            } catch (e) {
+              console.log(`Fehler beim Suchen/Entfernen der Deployments: ${e.message}`);
+            }
+
   # JOB 2: Build & Deploy für Main-Pushes sowie neu geöffnete/aktualisierte PRs
   build-and-deploy:
     if: github.event_name != 'pull_request' || github.event.action != 'closed'
@@ -117,7 +163,7 @@ jobs:
             --arg tag "${{ steps.meta.outputs.IMAGE_TAG }}" \
             --arg pr "$PR_NUM" \
             --argjson env "$ENV_JSON" \
-            '{image_tag: $tag, compose_yaml: $compose, pr_number: $pr, env_vars: $env}')
+            '{image_tag: $tag, compose_yaml:$compose, pr_number: $pr, env_vars:$env}')
 
           # 3. Deploy-Request absenden
           HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" -X POST https://cd.it25a.de/deploy \
