@@ -48,7 +48,7 @@ jobs:
             exit 1
           fi
 
-      - name: Deactivate and Delete GitHub Deployment for PR
+      - name: Set GitHub Deployment to Inactive for Closed PR
         uses: actions/github-script@v7
         with:
           script: |
@@ -69,7 +69,7 @@ jobs:
                 d => d.ref === prRef || d.sha === prSha
               );
 
-              // 3. Jedes gefundene Deployment auf 'inactive' setzen und danach löschen
+              // 3. Jedes gefundene Deployment auf 'inactive' setzen
               for (const deployment of prDeployments) {
                 try {
                   await github.rest.repos.createDeploymentStatus({
@@ -77,26 +77,20 @@ jobs:
                     repo: context.repo.repo,
                     deployment_id: deployment.id,
                     state: 'inactive',
-                    description: 'PR closed and preview deployment removed',
+                    description: 'PR closed and preview environment destroyed',
                   });
-
-                  await github.rest.repos.deleteDeployment({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    deployment_id: deployment.id,
-                  });
-                  console.log(`Deployment ID ${deployment.id} erfolgreich gelöscht.`);
+                  console.log(`Deployment ID ${deployment.id} erfolgreich auf 'inactive' gesetzt.`);
                 } catch (e) {
-                  console.log(`Hinweis beim Löschen von Deployment ${deployment.id}: ${e.message}`);
+                  console.log(`Hinweis beim Aktualisieren von Deployment ${deployment.id}: ${e.message}`);
                 }
               }
             } catch (e) {
-              console.log(`Fehler beim Suchen/Entfernen der Deployments: ${e.message}`);
+              console.log(`Fehler beim Suchen/Aktualisieren der Deployments: ${e.message}`);
             }
 
   # JOB 2: Build & Deploy für Main-Pushes sowie neu geöffnete/aktualisierte PRs
   build-and-deploy:
-    if: github.event_name != 'pull_request' || github.event.action != 'closed'
+    if: github.event_name != 'pull_request' || github.event.action == 'closed'
     runs-on: ubuntu-latest
 
     # Statische Umgebungen: PRs nutzen gemeinsam 'preview', Main nutzt 'production'
