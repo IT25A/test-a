@@ -4,7 +4,7 @@ const dotenv = require('dotenv');
 dotenv.config();
 const MESSAGE_SUFFIX = process.env.MESSAGE_SUFFIX || 'This is Test B';
 
-const MESSAGE = `Hello, ${MESSAGE_SUFFIX} | This is PR 19`;
+const MESSAGE = `Hello, ${MESSAGE_SUFFIX} | This is PR 20`;
 
 function createServer() {
   return http.createServer((req, res) => {
