@@ -90,7 +90,7 @@ jobs:
 
   # JOB 2: Build & Deploy für Main-Pushes sowie neu geöffnete/aktualisierte PRs
   build-and-deploy:
-    if: github.event_name != 'pull_request' || github.event.action == 'closed'
+    if: github.event_name != 'pull_request' || github.event.action != 'closed'
     runs-on: ubuntu-latest
 
     # Statische Umgebungen: PRs nutzen gemeinsam 'preview', Main nutzt 'production'
