@@ -135,7 +135,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.IMAGE_TAG }}
 
-      - name: Trigger Home Lab Deploy
+      - name: Trigger Server Deploy
         id: deploy
         run: |
           PR_NUM=""
