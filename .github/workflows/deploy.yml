@@ -141,16 +141,17 @@ jobs:
       - name: Parse Compose & Trigger Server Deploy
         id: deploy
         uses: actions/github-script@v7
+        env:
+          OIDC_TOKEN: ${{ steps.oidc.outputs.TOKEN }}
+          SECRET_API_KEY: ${{ secrets.API_KEY }}
         with:
           script: |
             const fs = require('fs');
-            const crypto = require('crypto');
             
             const prNum = context.payload.pull_request ? context.payload.pull_request.number.toString() : "";
             const refTag = prNum ? `pr-${prNum}` : "main";
             const repoLower = context.payload.repository.full_name.toLowerCase();
             
-            // docker-compose.yml einlesen und sauber nach ghcr.io-Images durchsuchen
             const composeContent = fs.readFileSync('docker-compose.yml', 'utf8');
             const imageRegex = /image:\s*([^\s"]+)/g;
             let match;
@@ -159,7 +160,6 @@ jobs:
             while ((match = imageRegex.exec(composeContent)) !== null) {
               let img = match[1].replace(/['"]/g, '').trim();
               if (img.includes('ghcr.io')) {
-                // Ersetze Variablen wie ${IMAGE_TAG:-...} oder expandiere sie
                 img = img.replace(/\$\{[^}]+\:-([^}]+)\}/g, '$1');
                 if (img.startsWith('ghcr.io')) {
                   tagsArray.push(img);
@@ -167,16 +167,10 @@ jobs:
               }
             }
             
-            // Fallback, falls keine Images gefunden wurden
             if (tagsArray.length === 0) {
               tagsArray.push(`ghcr.io/${repoLower}:${refTag}`);
             }
             
-            // Env-Variablen & Secrets zusammenführen
-            const vars = process.env;
-            // Wir lesen die GitHub vars und secrets aus dem Kontext
-            const envVars = { ...context.payload.client_payload }; 
-            // Hinweis: secrets.API_KEY übergeben wir sicher über env
             const customEnv = {
               API_KEY: process.env.SECRET_API_KEY || ""
             };
@@ -192,7 +186,6 @@ jobs:
             
             const token = process.env.OIDC_TOKEN;
             
-            // HTTP Request an den Deployer
             const res = await fetch('https://cd.it25a.de/deploy', {
               method: 'POST',
               headers: {
@@ -212,9 +205,6 @@ jobs:
             }
             
             core.setOutput('DEPLOY_URL', responseBody.url);
-          env:
-            OIDC_TOKEN: ${{ steps.oidc.outputs.TOKEN }}
-            SECRET_API_KEY: ${{ secrets.API_KEY }}
 
       - name: Inactivate Older Production Deployments
         if: github.event_name == 'push'
