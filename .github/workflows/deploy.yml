@@ -8,16 +8,14 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 permissions:
   contents: read
   packages: write
-  id-token: write    # ERFORDERLICH für den signierten GitHub JWT-Token!
-  deployments: write # ERFORDERLICH für GitHub Environments & Deployment Status API!
+  id-token: write
+  deployments: write
 
 jobs:
-  # JOB 1: Wird NUR ausgeführt, wenn ein PR geschlossen/gemergt wird
   cleanup:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
     runs-on: ubuntu-latest
@@ -38,25 +36,18 @@ jobs:
             -H "Authorization: Bearer ${{ steps.oidc.outputs.TOKEN }}" \
             -d "$PAYLOAD")
 
-          echo "Response HTTP Status: $HTTP_STATUS"
-          echo "Response Body:"
-          cat cleanup_response.json
-          echo ""
-
           if [ "$HTTP_STATUS" -ne 200 ]; then
-            echo "Fehler beim Bereinigen der PR-Umgebung!"
+            echo "Fehler beim Bereinigen!"
             exit 1
           fi
 
-      - name: Set GitHub Deployment to Inactive for Closed PR
+      - name: Set GitHub Deployment to Inactive
         uses: actions/github-script@v7
         with:
           script: |
             const prRef = context.payload.pull_request.head.ref;
             const prSha = context.payload.pull_request.head.sha;
-
             try {
-              // 1. Alle Deployments der 'preview'-Umgebung abrufen
               const { data: deployments } = await github.rest.repos.listDeployments({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -64,39 +55,30 @@ jobs:
                 per_page: 100,
               });
 
-              // 2. Deployments filtern, die zu diesem PR gehören (Match auf Ref oder SHA)
-              const prDeployments = deployments.filter(
-                d => d.ref === prRef || d.sha === prSha
-              );
-
-              // 3. Jedes gefundene Deployment auf 'inactive' setzen
+              const prDeployments = deployments.filter(d => d.ref === prRef || d.sha === prSha);
               for (const deployment of prDeployments) {
-                try {
-                  await github.rest.repos.createDeploymentStatus({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    deployment_id: deployment.id,
-                    state: 'inactive',
-                    description: 'PR closed and preview environment destroyed',
-                  });
-                  console.log(`Deployment ID ${deployment.id} erfolgreich auf 'inactive' gesetzt.`);
-                } catch (e) {
-                  console.log(`Hinweis beim Aktualisieren von Deployment ${deployment.id}: ${e.message}`);
-                }
+                await github.rest.repos.createDeploymentStatus({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  deployment_id: deployment.id,
+                  state: 'inactive',
+                  description: 'PR closed and preview destroyed',
+                });
               }
             } catch (e) {
-              console.log(`Fehler beim Suchen/Aktualisieren der Deployments: ${e.message}`);
+              console.log(`Hinweis: ${e.message}`);
             }
 
-  # JOB 2: Build & Deploy für Main-Pushes sowie neu geöffnete/aktualisierte PRs
-  build-and-deploy:
+  build-images:
     if: github.event_name != 'pull_request' || github.event.action != 'closed'
     runs-on: ubuntu-latest
-
-    # Statische Umgebungen: PRs nutzen gemeinsam 'preview', Main nutzt 'production'
-    environment:
-      name: ${{ github.event_name == 'pull_request' && 'preview' || 'production' }}
-      url: ${{ steps.deploy.outputs.DEPLOY_URL }}
+    strategy:
+      fail-fast: true
+      matrix:
+        service:
+          - name: app
+            context: .
+            dockerfile: ./Dockerfile
 
     steps:
       - name: Checkout Code
@@ -109,6 +91,46 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Set Image Tag Name
+        id: meta
+        run: |
+          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          SERVICE_NAME="${{ matrix.service.name }}"
+          
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            REF_TAG="pr-${{ github.event.number }}"
+          else
+            REF_TAG="main"
+          fi
+          
+          if [ "$SERVICE_NAME" = "app" ]; then
+            FULL_TAG="${{ env.REGISTRY }}/${REPO_LOWER}:${REF_TAG}"
+          else
+            FULL_TAG="${{ env.REGISTRY }}/${REPO_LOWER}:${SERVICE_NAME}-${REF_TAG}"
+          fi
+          
+          echo "IMAGE_TAG=$FULL_TAG" >> $GITHUB_OUTPUT
+          echo "Built Tag: $FULL_TAG"
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.service.context }}
+          file: ${{ matrix.service.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.IMAGE_TAG }}
+
+  deploy:
+    needs: build-images
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event_name == 'pull_request' && 'preview' || 'production' }}
+      url: ${{ steps.deploy.outputs.DEPLOY_URL }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
       - name: Get GitHub JWT Token
         id: oidc
         run: |
@@ -116,66 +138,53 @@ jobs:
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=it25a-deployer" | jq -r '.value')
           echo "TOKEN=$TOKEN" >> $GITHUB_OUTPUT
 
-      - name: Set Tag Name
-        id: meta
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            TAG="pr-${{ github.event.number }}"
-          else
-            TAG="main"
-          fi
-          
-          RAW_TAG="${{ env.REGISTRY }}/${{ github.repository }}:$TAG"
-          echo "IMAGE_TAG=${RAW_TAG,,}" >> $GITHUB_OUTPUT
-
-      - name: Build and Push Docker Image to GHCR
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.IMAGE_TAG }}
-
       - name: Trigger Server Deploy
         id: deploy
         run: |
           PR_NUM=""
+          REF_TAG="main"
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             PR_NUM="${{ github.event.number }}"
+            REF_TAG="pr-${PR_NUM}"
           fi
 
-          # 1. Variables & Secrets sammeln
-          VARS_JSON=$(echo '${{ toJson(vars) }}')
-          SECRETS_JSON=$(jq -n \
-            --arg api_key "${{ secrets.API_KEY }}" \
-            '{API_KEY: $api_key}')
+          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
 
+          TAGS_ARRAY=()
+          while IFS= read -r img; do
+            if [ -n "$img" ]; then
+              TAGS_ARRAY+=("$img")
+            fi
+          done < <(grep -oE "ghcr\.io/${REPO_LOWER}[a-zA-Z0-9_.-/:]+" docker-compose.yml || true)
+
+          if [ ${#TAGS_ARRAY[@]} -eq 0 ]; then
+            TAGS_ARRAY+=("${{ env.REGISTRY }}/${REPO_LOWER}:${REF_TAG}")
+          fi
+
+          TAGS_JSON=$(printf '\%s\n' "${TAGS_ARRAY[@]}" | jq -R . | jq -s .)
+
+          VARS_JSON=$(echo '${{ toJson(vars) }}')
+          SECRETS_JSON=$(jq -n --arg api_key "${{ secrets.API_KEY }}" '{API_KEY: $api_key}')
           ENV_JSON=$(jq -s '.[0] * .[1]' <(echo "$VARS_JSON") <(echo "$SECRETS_JSON"))
 
-          # 2. Payload bauen
           PAYLOAD=$(jq -n \
             --rawfile compose docker-compose.yml \
-            --arg tag "${{ steps.meta.outputs.IMAGE_TAG }}" \
+            --argjson tags "$TAGS_JSON" \
             --arg pr "$PR_NUM" \
             --argjson env "$ENV_JSON" \
-            '{image_tag: $tag, compose_yaml:$compose, pr_number: $pr, env_vars:$env}')
+            '{image_tags: $tags, compose_yaml:$compose, pr_number: $pr, env_vars:$env}')
 
-          # 3. Deploy-Request absenden
           HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" -X POST https://cd.it25a.de/deploy \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${{ steps.oidc.outputs.TOKEN }}" \
             -d "$PAYLOAD")
 
-          echo "Response HTTP Status: $HTTP_STATUS"
-          echo "Response Body:"
-          cat response.json
-          echo ""
-
           if [ "$HTTP_STATUS" -ne 200 ]; then
             echo "Deployment fehlgeschlagen!"
+            cat response.json
             exit 1
           fi
 
-          # 4. URL auslesen
           URL=$(jq -r '.url' response.json)
           echo "DEPLOY_URL=$URL" >> $GITHUB_OUTPUT
 
@@ -185,7 +194,6 @@ jobs:
         with:
           script: |
             try {
-              // 1. Alle Deployments der 'production'-Umgebung abrufen
               const { data: deployments } = await github.rest.repos.listDeployments({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -193,26 +201,18 @@ jobs:
                 per_page: 100,
               });
 
-              // 2. Absteigend nach ID sortieren (neuestes zuerst)
               deployments.sort((a, b) => b.id - a.id);
-
-              // 3. Erstes (neuestes) Deployment aktiv lassen, alle älteren deaktivieren
               const olderDeployments = deployments.slice(1);
 
               for (const deployment of olderDeployments) {
-                try {
-                  await github.rest.repos.createDeploymentStatus({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    deployment_id: deployment.id,
-                    state: 'inactive',
-                    description: 'Superseded by newer production deployment',
-                  });
-                  console.log(`Älteres Production-Deployment ID ${deployment.id} auf 'inactive' gesetzt.`);
-                } catch (e) {
-                  console.log(`Hinweis bei Deployment ID ${deployment.id}: ${e.message}`);
-                }
+                await github.rest.repos.createDeploymentStatus({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  deployment_id: deployment.id,
+                  state: 'inactive',
+                  description: 'Superseded by newer production deployment',
+                });
               }
             } catch (e) {
-              console.log(`Fehler beim Aktualisieren der Production-Deployments: ${e.message}`);
+              console.log(`Hinweis: ${e.message}`);
             }
