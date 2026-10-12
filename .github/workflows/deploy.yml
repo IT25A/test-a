@@ -138,55 +138,83 @@ jobs:
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=it25a-deployer" | jq -r '.value')
           echo "TOKEN=$TOKEN" >> $GITHUB_OUTPUT
 
-      - name: Trigger Server Deploy
+      - name: Parse Compose & Trigger Server Deploy
         id: deploy
-        run: |
-          PR_NUM=""
-          REF_TAG="main"
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            PR_NUM="${{ github.event.number }}"
-            REF_TAG="pr-${PR_NUM}"
-          fi
-
-          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-
-          TAGS_ARRAY=()
-          while IFS= read -r img; do
-            if [ -n "$img" ]; then
-              TAGS_ARRAY+=("$img")
-            fi
-          done < <(grep -oE "ghcr\.io/${REPO_LOWER}[a-zA-Z0-9_.-/:]+" docker-compose.yml || true)
-
-          if [ ${#TAGS_ARRAY[@]} -eq 0 ]; then
-            TAGS_ARRAY+=("${{ env.REGISTRY }}/${REPO_LOWER}:${REF_TAG}")
-          fi
-
-          TAGS_JSON=$(printf '\%s\n' "${TAGS_ARRAY[@]}" | jq -R . | jq -s .)
-
-          VARS_JSON=$(echo '${{ toJson(vars) }}')
-          SECRETS_JSON=$(jq -n --arg api_key "${{ secrets.API_KEY }}" '{API_KEY: $api_key}')
-          ENV_JSON=$(jq -s '.[0] * .[1]' <(echo "$VARS_JSON") <(echo "$SECRETS_JSON"))
-
-          PAYLOAD=$(jq -n \
-            --rawfile compose docker-compose.yml \
-            --argjson tags "$TAGS_JSON" \
-            --arg pr "$PR_NUM" \
-            --argjson env "$ENV_JSON" \
-            '{image_tags: $tags, compose_yaml:$compose, pr_number: $pr, env_vars:$env}')
-
-          HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" -X POST https://cd.it25a.de/deploy \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer ${{ steps.oidc.outputs.TOKEN }}" \
-            -d "$PAYLOAD")
-
-          if [ "$HTTP_STATUS" -ne 200 ]; then
-            echo "Deployment fehlgeschlagen!"
-            cat response.json
-            exit 1
-          fi
-
-          URL=$(jq -r '.url' response.json)
-          echo "DEPLOY_URL=$URL" >> $GITHUB_OUTPUT
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const crypto = require('crypto');
+            
+            const prNum = context.payload.pull_request ? context.payload.pull_request.number.toString() : "";
+            const refTag = prNum ? `pr-${prNum}` : "main";
+            const repoLower = context.payload.repository.full_name.toLowerCase();
+            
+            // docker-compose.yml einlesen und sauber nach ghcr.io-Images durchsuchen
+            const composeContent = fs.readFileSync('docker-compose.yml', 'utf8');
+            const imageRegex = /image:\s*([^\s"]+)/g;
+            let match;
+            let tagsArray = [];
+            
+            while ((match = imageRegex.exec(composeContent)) !== null) {
+              let img = match[1].replace(/['"]/g, '').trim();
+              if (img.includes('ghcr.io')) {
+                // Ersetze Variablen wie ${IMAGE_TAG:-...} oder expandiere sie
+                img = img.replace(/\$\{[^}]+\:-([^}]+)\}/g, '$1');
+                if (img.startsWith('ghcr.io')) {
+                  tagsArray.push(img);
+                }
+              }
+            }
+            
+            // Fallback, falls keine Images gefunden wurden
+            if (tagsArray.length === 0) {
+              tagsArray.push(`ghcr.io/${repoLower}:${refTag}`);
+            }
+            
+            // Env-Variablen & Secrets zusammenführen
+            const vars = process.env;
+            // Wir lesen die GitHub vars und secrets aus dem Kontext
+            const envVars = { ...context.payload.client_payload }; 
+            // Hinweis: secrets.API_KEY übergeben wir sicher über env
+            const customEnv = {
+              API_KEY: process.env.SECRET_API_KEY || ""
+            };
+            
+            const payload = {
+              image_tags: [...new Set(tagsArray)],
+              compose_yaml: composeContent,
+              pr_number: prNum ? prNum : null,
+              env_vars: customEnv
+            };
+            
+            console.log("Sending Payload:", JSON.stringify(payload, null, 2));
+            
+            const token = process.env.OIDC_TOKEN;
+            
+            // HTTP Request an den Deployer
+            const res = await fetch('https://cd.it25a.de/deploy', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+              },
+              body: JSON.stringify(payload)
+            });
+            
+            const responseBody = await res.json();
+            console.log("Response Status:", res.status);
+            console.log("Response Body:", responseBody);
+            
+            if (res.status !== 200) {
+              core.setFailed(`Deployment fehlgeschlagen: ${JSON.stringify(responseBody)}`);
+              return;
+            }
+            
+            core.setOutput('DEPLOY_URL', responseBody.url);
+          env:
+            OIDC_TOKEN: ${{ steps.oidc.outputs.TOKEN }}
+            SECRET_API_KEY: ${{ secrets.API_KEY }}
 
       - name: Inactivate Older Production Deployments
         if: github.event_name == 'push'
