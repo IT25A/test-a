@@ -94,16 +94,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set Image Tag Name
+      - name: Set Image Tag Name & Subdomain
         id: meta
         run: |
           REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          REPO_NAME=$(echo "$REPO_LOWER" | cut -d'/' -f2)
           SERVICE_NAME="${{ matrix.service.name }}"
           
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             REF_TAG="pr-${{ github.event.number }}"
+            SUBDOMAIN="${REPO_NAME}-pr${{ github.event.number }}"
           else
             REF_TAG="main"
+            SUBDOMAIN="${REPO_NAME}"
           fi
           
           if [ "$SERVICE_NAME" = "app" ]; then
@@ -113,6 +116,7 @@ jobs:
           fi
           
           echo "IMAGE_TAG=$FULL_TAG" >> $GITHUB_OUTPUT
+          echo "SUBDOMAIN=$SUBDOMAIN" >> $GITHUB_OUTPUT
           echo "Built Tag: $FULL_TAG"
 
       - name: Build and Push Docker Image
@@ -122,6 +126,8 @@ jobs:
           file: ${{ matrix.service.dockerfile }}
           push: true
           tags: ${{ steps.meta.outputs.IMAGE_TAG }}
+          build-args: |
+            VITE_API_URL=https://api-${{ steps.meta.outputs.SUBDOMAIN }}.apps.it25a.de
 
       - name: Save Image Tag to File
         run: echo "${{ steps.meta.outputs.IMAGE_TAG }}" > image-tag-${{ matrix.service.name }}.txt

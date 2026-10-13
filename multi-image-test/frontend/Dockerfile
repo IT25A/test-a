@@ -12,6 +12,11 @@ FROM node:24-alpine AS build-env
 COPY . /app/
 COPY --from=development-dependencies-env /app/node_modules /app/node_modules
 WORKDIR /app
+
+# --- NEU: Build-Argument für Vite-Variablen zur Build-Zeit ---
+ARG VITE_API_URL
+ENV VITE_API_URL=$VITE_API_URL
+
 RUN npm run build
 
 FROM node:24-alpine
