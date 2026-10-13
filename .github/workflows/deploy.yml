@@ -123,6 +123,16 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.IMAGE_TAG }}
 
+      - name: Save Image Tag to File
+        run: echo "${{ steps.meta.outputs.IMAGE_TAG }}" > image-tag-${{ matrix.service.name }}.txt
+
+      - name: Upload Image Tag Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tag-${{ matrix.service.name }}
+          path: image-tag-${{ matrix.service.name }}.txt
+          retention-days: 1
+
   deploy:
     needs: build-images
     runs-on: ubuntu-latest
@@ -134,6 +144,12 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Download All Image Tags
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded-tags
+          pattern: tag-*
+
       - name: Get GitHub JWT Token
         id: oidc
         run: |
@@ -141,7 +157,7 @@ jobs:
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=it25a-deployer" | jq -r '.value')
           echo "TOKEN=$TOKEN" >> $GITHUB_OUTPUT
 
-      - name: Parse Compose & Trigger Server Deploy
+      - name: Trigger Server Deploy
         id: deploy
         uses: actions/github-script@v7
         env:
@@ -150,29 +166,38 @@ jobs:
         with:
           script: |
             const fs = require('fs');
+            const path = require('path');
             
             const prNum = context.payload.pull_request ? context.payload.pull_request.number.toString() : "";
-            const refTag = prNum ? `pr-${prNum}` : "main";
             const repoLower = context.payload.repository.full_name.toLowerCase();
             
-            const composeContent = fs.readFileSync('docker-compose.yml', 'utf8');
-            const imageRegex = /image:\s*([^\s"]+)/g;
-            let match;
             let tagsArray = [];
+            const tagsDir = 'downloaded-tags';
             
-            while ((match = imageRegex.exec(composeContent)) !== null) {
-              let img = match[1].replace(/['"]/g, '').trim();
-              if (img.includes('ghcr.io')) {
-                img = img.replace(/\$\{[^}]+\:-([^}]+)\}/g, '$1');
-                if (img.startsWith('ghcr.io')) {
-                  tagsArray.push(img);
+            function walkDir(dir) {
+              const files = fs.readdirSync(dir);
+              for (const file of files) {
+                const filePath = path.join(dir, file);
+                const stat = fs.statSync(filePath);
+                if (stat.isDirectory()) {
+                  walkDir(filePath);
+                } else if (file.endsWith('.txt')) {
+                  const tag = fs.readFileSync(filePath, 'utf8').trim();
+                  if (tag) tagsArray.push(tag);
                 }
               }
             }
             
+            if (fs.existsSync(tagsDir)) {
+              walkDir(tagsDir);
+            }
+            
             if (tagsArray.length === 0) {
+              const refTag = prNum ? `pr-${prNum}` : "main";
               tagsArray.push(`ghcr.io/${repoLower}:${refTag}`);
             }
+            
+            const composeContent = fs.readFileSync('docker-compose.yml', 'utf8');
             
             const customEnv = {
               API_KEY: process.env.SECRET_API_KEY || ""
