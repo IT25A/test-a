@@ -94,19 +94,44 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set Image Tag Name & Subdomain
+      - name: Get GitHub JWT Token for Build
+        id: oidc-build
+        run: |
+          TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=it25a-deployer" | jq -r '.value')
+          echo "TOKEN=$TOKEN" >> $GITHUB_OUTPUT
+
+      - name: Resolve API URL from Deployer
+        id: resolve-url
+        run: |
+          PR_PARAM=""
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            PR_PARAM="?pr_number=${{ github.event.number }}"
+          fi
+
+          RESPONSE=$(curl -s -H "Authorization: Bearer ${{ steps.oidc-build.outputs.TOKEN }}" \
+            "https://cd.it25a.de/resolve$PR_PARAM")
+
+          echo "Resolve Response: $RESPONSE"
+          API_URL=$(echo "$RESPONSE" | jq -r '.api_url')
+
+          if [ -z "$API_URL" ] \vert{}\vert{} [ "$API_URL" = "null" ]; then
+            echo "Fehler beim Auflösen der API-URL vom Deployer!"
+            exit 1
+          fi
+
+          echo "API_URL=$API_URL" >> $GITHUB_OUTPUT
+
+      - name: Set Image Tag Name
         id: meta
         run: |
           REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          REPO_NAME=$(echo "$REPO_LOWER" | cut -d'/' -f2)
           SERVICE_NAME="${{ matrix.service.name }}"
           
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             REF_TAG="pr-${{ github.event.number }}"
-            SUBDOMAIN="${REPO_NAME}-pr${{ github.event.number }}"
           else
             REF_TAG="main"
-            SUBDOMAIN="${REPO_NAME}"
           fi
           
           if [ "$SERVICE_NAME" = "app" ]; then
@@ -116,7 +141,6 @@ jobs:
           fi
           
           echo "IMAGE_TAG=$FULL_TAG" >> $GITHUB_OUTPUT
-          echo "SUBDOMAIN=$SUBDOMAIN" >> $GITHUB_OUTPUT
           echo "Built Tag: $FULL_TAG"
 
       - name: Build and Push Docker Image
@@ -127,7 +151,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.IMAGE_TAG }}
           build-args: |
-            VITE_API_URL=https://api-${{ steps.meta.outputs.SUBDOMAIN }}.apps.it25a.de
+            VITE_API_URL=${{ steps.resolve-url.outputs.API_URL }}
 
       - name: Save Image Tag to File
         run: echo "${{ steps.meta.outputs.IMAGE_TAG }}" > image-tag-${{ matrix.service.name }}.txt
@@ -254,7 +278,7 @@ jobs:
               });
 
               deployments.sort((a, b) => b.id - a.id);
-              const olderDeployments = deployments.slice(1);
+              theOlderDeployments = deployments.slice(1);
 
               for (const deployment of olderDeployments) {
                 await github.rest.repos.createDeploymentStatus({
