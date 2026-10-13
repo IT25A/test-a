@@ -1,13 +1,22 @@
 services:
   web:
-    image: ${IMAGE_TAG} # Wird von der Pipeline automatisch gesetzt
+    image: ${IMAGE_TAG_FRONTEND} # Wird von der Pipeline automatisch gesetzt
     restart: unless-stopped
     environment:
-      - PORT=${PORT:-3000}
-      - MESSAGE_SUFFIX=${MESSAGE_SUFFIX}
+      - VITE_API_URL="https://api-${FQDN}"
     labels:
       caddy: "http://${FQDN}"
       caddy.reverse_proxy: "{{upstreams ${PORT:-3000}}}"
+    networks:
+      - default
+      - caddy_net
+
+  api:
+    image: ${IMAGE_TAG_BACKEND} # Wird von der Pipeline automatisch gesetzt
+    restart: unless-stopped
+    labels:
+      caddy: "http://api-${FQDN}"
+      caddy.reverse_proxy: "{{upstreams ${PORT:-3001}}}"
     networks:
       - default
       - caddy_net

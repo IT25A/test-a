@@ -76,9 +76,12 @@ jobs:
       fail-fast: true
       matrix:
         service:
-          - name: app
-            context: .
-            dockerfile: ./Dockerfile
+          - name: frontend
+            context: ./multi-image-test/frontend
+            dockerfile: ./multi-image-test/frontend/Dockerfile
+          - name: backend
+            context: ./multi-image-test/backend
+            dockerfile: ./multi-image-test/backend/Dockerfile
 
     steps:
       - name: Checkout Code
