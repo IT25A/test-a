@@ -30,16 +30,11 @@ jobs:
       - name: Trigger Cleanup
         run: |
           PAYLOAD=$(jq -n --arg pr "${{ github.event.number }}" '{pr_number: $pr}')
-          
           HTTP_STATUS=$(curl -s -o cleanup_response.json -w "%{http_code}" -X POST https://cd.it25a.de/cleanup \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${{ steps.oidc.outputs.TOKEN }}" \
             -d "$PAYLOAD")
-
-          if [ "$HTTP_STATUS" -ne 200 ]; then
-            echo "Fehler beim Bereinigen!"
-            exit 1
-          fi
+          if [ "$HTTP_STATUS" -ne 200 ]; then exit 1; fi
 
       - name: Set GitHub Deployment to Inactive
         uses: actions/github-script@v7
@@ -49,25 +44,14 @@ jobs:
             const prSha = context.payload.pull_request.head.sha;
             try {
               const { data: deployments } = await github.rest.repos.listDeployments({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                environment: 'preview',
-                per_page: 100,
+                owner: context.repo.owner, repo: context.repo.repo, environment: 'preview', per_page: 100,
               });
-
-              const prDeployments = deployments.filter(d => d.ref === prRef || d.sha === prSha);
-              for (const deployment of prDeployments) {
+              for (const d of deployments.filter(d => d.ref === prRef || d.sha === prSha)) {
                 await github.rest.repos.createDeploymentStatus({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  deployment_id: deployment.id,
-                  state: 'inactive',
-                  description: 'PR closed and preview destroyed',
+                  owner: context.repo.owner, repo: context.repo.repo, deployment_id: d.id, state: 'inactive',
                 });
               }
-            } catch (e) {
-              console.log(`Hinweis: ${e.message}`);
-            }
+            } catch (e) {}
 
   build-images:
     if: github.event_name != 'pull_request' || github.event.action != 'closed'
@@ -94,33 +78,39 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Get GitHub JWT Token for Build
-        id: oidc-build
+      - name: Get GitHub JWT Token
+        id: oidc
         run: |
           TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=it25a-deployer" | jq -r '.value')
           echo "TOKEN=$TOKEN" >> $GITHUB_OUTPUT
 
-      - name: Resolve API URL from Deployer
-        id: resolve-url
+      - name: Resolve URLs from Deployer API
+        id: resolve
         run: |
-          PR_PARAM=""
+          PR_NUM=""
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            PR_PARAM="?pr_number=${{ github.event.number }}"
+            PR_NUM="${{ github.event.number }}"
           fi
 
-          RESPONSE=$(curl -s -H "Authorization: Bearer ${{ steps.oidc-build.outputs.TOKEN }}" \
-            "https://cd.it25a.de/resolve$PR_PARAM")
+          PAYLOAD=$(jq -n --argjson services '["${{ matrix.service.name }}"]' --arg pr "$PR_NUM" '{services: $services, pr_number: ($pr | if . == "" then null else . end)}')
+
+          RESPONSE=$(curl -s -X POST https://cd.it25a.de/resolve \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${{ steps.oidc.outputs.TOKEN }}" \
+            -d "$PAYLOAD")
 
           echo "Resolve Response: $RESPONSE"
-          API_URL=$(echo "$RESPONSE" | jq -r '.api_url')
-
-          if [ -z "$API_URL" ] \vert{}\vert{} [ "$API_URL" = "null" ]; then
-            echo "Fehler beim Auflösen der API-URL vom Deployer!"
+          
+          # URL für den spezifischen Service auslesen
+          SERVICE_URL=$(echo "$RESPONSE" | jq -r --arg s "${{ matrix.service.name }}" '.urls[$s]')
+          
+          if [ -z "$SERVICE_URL" ] \vert{}\vert{} [ "$SERVICE_URL" = "null" ]; then
+            echo "Fehler beim Auflösen der URL für Service ${{ matrix.service.name }}!"
             exit 1
           fi
 
-          echo "API_URL=$API_URL" >> $GITHUB_OUTPUT
+          echo "SERVICE_URL=$SERVICE_URL" >> $GITHUB_OUTPUT
 
       - name: Set Image Tag Name
         id: meta
@@ -134,14 +124,8 @@ jobs:
             REF_TAG="main"
           fi
           
-          if [ "$SERVICE_NAME" = "app" ]; then
-            FULL_TAG="${{ env.REGISTRY }}/${REPO_LOWER}:${REF_TAG}"
-          else
-            FULL_TAG="${{ env.REGISTRY }}/${REPO_LOWER}:${SERVICE_NAME}-${REF_TAG}"
-          fi
-          
+          FULL_TAG="${{ env.REGISTRY }}/${REPO_LOWER}:${SERVICE_NAME}-${REF_TAG}"
           echo "IMAGE_TAG=$FULL_TAG" >> $GITHUB_OUTPUT
-          echo "Built Tag: $FULL_TAG"
 
       - name: Build and Push Docker Image
         uses: docker/build-push-action@v5
@@ -151,7 +135,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.IMAGE_TAG }}
           build-args: |
-            VITE_API_URL=${{ steps.resolve-url.outputs.API_URL }}
+            VITE_API_URL=${{ steps.resolve.outputs.SERVICE_URL }}
 
       - name: Save Image Tag to File
         run: echo "${{ steps.meta.outputs.IMAGE_TAG }}" > image-tag-${{ matrix.service.name }}.txt
@@ -240,8 +224,6 @@ jobs:
               env_vars: customEnv
             };
             
-            console.log("Sending Payload:", JSON.stringify(payload, null, 2));
-            
             const token = process.env.OIDC_TOKEN;
             
             const res = await fetch('https://cd.it25a.de/deploy', {
@@ -254,9 +236,6 @@ jobs:
             });
             
             const responseBody = await res.json();
-            console.log("Response Status:", res.status);
-            console.log("Response Body:", responseBody);
-            
             if (res.status !== 200) {
               core.setFailed(`Deployment fehlgeschlagen: ${JSON.stringify(responseBody)}`);
               return;
@@ -271,24 +250,11 @@ jobs:
           script: |
             try {
               const { data: deployments } = await github.rest.repos.listDeployments({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                environment: 'production',
-                per_page: 100,
+                owner: context.repo.owner, repo: context.repo.repo, environment: 'production', per_page: 100,
               });
-
-              deployments.sort((a, b) => b.id - a.id);
-              theOlderDeployments = deployments.slice(1);
-
-              for (const deployment of olderDeployments) {
+              for (const d of deployments.slice(1)) {
                 await github.rest.repos.createDeploymentStatus({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  deployment_id: deployment.id,
-                  state: 'inactive',
-                  description: 'Superseded by newer production deployment',
+                  owner: context.repo.owner, repo: context.repo.repo, deployment_id: d.id, state: 'inactive',
                 });
               }
-            } catch (e) {
-              console.log(`Hinweis: ${e.message}`);
-            }
+            } catch (e) {}
