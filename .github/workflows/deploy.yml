@@ -93,7 +93,8 @@ jobs:
             PR_NUM="${{ github.event.number }}"
           fi
 
-          PAYLOAD=$(jq -n --argjson services '["${{ matrix.service.name }}"]' --arg pr "$PR_NUM" '{services: $services, pr_number: ($pr | if . == "" then null else . end)}')
+          # Wir fragen stets beide Services ab, um an die korrekte API-URL zu kommen
+          PAYLOAD=$(jq -n --argjson services '["frontend", "backend"]' --arg pr "$PR_NUM" '{services: $services, pr_number: ($pr | if . == "" then null else . end)}')
 
           RESPONSE=$(curl -s -X POST https://cd.it25a.de/resolve \
             -H "Content-Type: application/json" \
@@ -102,15 +103,26 @@ jobs:
 
           echo "Resolve Response: $RESPONSE"
           
-          # URL für den spezifischen Service auslesen
-          SERVICE_URL=$(echo "$RESPONSE" | jq -r --arg s "${{ matrix.service.name }}" '.urls[$s]')
-          
-          if [ -z "$SERVICE_URL" ] \vert{}\vert{} [ "$SERVICE_URL" = "null" ]; then
-            echo "Fehler beim Auflösen der URL für Service ${{ matrix.service.name }}!"
+          # Die API/Backend-URL für das Frontend extrahieren
+          API_URL=$(echo "$RESPONSE" | jq -r '.urls.backend // .urls.api // ""')
+
+          if [ -z "$API_URL" ] \vert{}\vert{} [ "$API_URL" = "null" ]; then
+            echo "Fehler beim Auflösen der API-URL!"
             exit 1
           fi
 
-          echo "SERVICE_URL=$SERVICE_URL" >> $GITHUB_OUTPUT
+          echo "API_URL=$API_URL" >> $GITHUB_OUTPUT
+
+      - name: Determine Build Args
+        id: build-args
+        run: |
+          # Nur das Frontend bekommt die VITE_API_URL übergeben
+          if [ "${{ matrix.service.name }}" = "frontend" ]; then
+            echo "VITE_API_URL=${{ steps.resolve.outputs.API_URL }}" >> $GITHUB_OUTPUT
+            echo "Passing VITE_API_URL: ${{ steps.resolve.outputs.API_URL }}"
+          else
+            echo "VITE_API_URL=" >> $GITHUB_OUTPUT
+          fi
 
       - name: Set Image Tag Name
         id: meta
@@ -135,7 +147,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.IMAGE_TAG }}
           build-args: |
-            VITE_API_URL=${{ steps.resolve.outputs.SERVICE_URL }}
+            VITE_API_URL=${{ steps.build-args.outputs.VITE_API_URL }}
 
       - name: Save Image Tag to File
         run: echo "${{ steps.meta.outputs.IMAGE_TAG }}" > image-tag-${{ matrix.service.name }}.txt
