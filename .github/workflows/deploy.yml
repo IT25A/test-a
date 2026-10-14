@@ -104,7 +104,7 @@ jobs:
           echo "Resolve Response: $RESPONSE"
           
           # Die API/Backend-URL für das Frontend extrahieren
-          API_URL=$(echo "$RESPONSE" | jq -r '.urls.backend // .urls.api // ""')
+          API_URL=$(echo "$RESPONSE" | jq -r '.urls.frontend // .urls.app // ""')
 
           if [ -z "$API_URL" ] \vert{}\vert{} [ "$API_URL" = "null" ]; then
             echo "Fehler beim Auflösen der API-URL!"
