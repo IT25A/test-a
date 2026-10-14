@@ -5,13 +5,13 @@ services:
     environment:
       - VITE_API_URL=https://${FQDN}/api
     labels:
-      caddy: "http://${FQDN}"
-      # 1. Definiere einen Matcher für alle Pfade, die mit /api/* beginnen
-      caddy.@api: "path /api/*"
-      # 2. Leite gematchte /api/* Anfragen an das Backend weiter (Port 3001)
-      caddy.reverse_proxy: "@api {{upstreams ${PORT_BACKEND:-3001}}}"
-      # 3. Fallback: Alle anderen Anfragen gehen ans Frontend (Port 3000)
-      caddy.reverse_proxy.1: "{{upstreams ${PORT_FRONTEND:-3000}}}"
+      caddy: "${FQDN}"
+      # 1. Handle für alle /api/* Anfragen -> direkt an den api-Container
+      caddy.handle.0: "/api/*"
+      caddy.handle.0_reverse_proxy: "api:3001"
+      # 2. Fallback-Handle für alle anderen Anfragen -> ans Frontend
+      caddy.handle.1: "*"
+      caddy.handle.1_reverse_proxy: "web:3000"
     networks:
       - default
       - caddy_net
@@ -19,8 +19,6 @@ services:
   api:
     image: ${IMAGE_TAG_BACKEND} # Wird von der Pipeline automatisch gesetzt
     restart: unless-stopped
-    # Das Backend benötigt keine eigene öffentliche caddy:-Subdomain mehr, 
-    # da es komplett über den /api-Pfad des Web-Containers abgesichert ist!
     networks:
       - default
       - caddy_net
