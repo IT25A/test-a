@@ -44,7 +44,7 @@ export function Welcome() {
             </ul>
           </nav>
           <div>
-            <form method="post" action={`${API_URL}/api/form`} className="flex flex-col gap-2">
+            <form method="post" action={`${API_URL}/form`} className="flex flex-col gap-2">
               <input type="text" name="name" placeholder="Enter your name" autoComplete="name" className="border p-2 rounded w-full" />
               <input type="email" name="email" placeholder="Enter your email" autoComplete="email" className="border p-2 rounded w-full mt-2" />
               <button type="submit" className="bg-blue-500 text-white p-2 rounded w-full mt-2">Submit</button>
