@@ -6,7 +6,7 @@ services:
     build: 
       context: ./multi-image-test/frontend
       args:
-        VITE_API_URL: "{{ backend.api }}"
+        VITE_API_URL: "{{ url.backend }}"
     port: 3000
     route: { host: "@" }            # https://<alias>.apps.it25a.de
     environment:
