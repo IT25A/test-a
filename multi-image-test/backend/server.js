@@ -15,6 +15,14 @@ app.post("/form", (req, res) => {
     res.json({ message: `Received form data: Name - ${name}, Email - ${email}` });
 });
 
+app.get("/headers", (req, res) => {
+  const name = req.get("It25a-Name");
+  res.json({
+    user: req.get("It25a-User") ?? null,
+    name: name ? decodeURIComponent(name) : null, // the name is URL-encoded
+  });
+});
+
 app.listen(port, () => {
   console.log(`Example app listening on port ${port}!`);
 });
