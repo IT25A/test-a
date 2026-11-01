@@ -2,9 +2,16 @@
 # One application, one container (for example SvelteKit with adapter-node)
 version: 1
 services:
-  app:
-    build: .
+  frontend:
+    build: 
+      context: ./multi-image-test/frontend
+      args:
+        VITE_API_URL: "{{ backend.api }}"
     port: 3000
     route: { host: "@" }            # https://<alias>.apps.it25a.de
     environment:
       MESSAGE_SUFFIX: "this is an ordinary message!"
+  backend:
+    build: ./multi-image-test/backend
+    port: 3001
+    route: { host: "@", path: "/api" }
