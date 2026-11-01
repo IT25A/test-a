@@ -14,4 +14,4 @@ services:
   backend:
     build: ./multi-image-test/backend
     port: 3001
-    route: { host: "api" }
+    route: { host: "@", path: "/api", strip_prefix: true }
