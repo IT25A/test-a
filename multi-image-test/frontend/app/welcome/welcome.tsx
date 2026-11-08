@@ -1,10 +1,44 @@
+import { useEffect, useState, type FormEvent } from "react";
 import logoDark from "./logo-dark.svg";
 import logoLight from "./logo-light.svg";
 
 const API_URL = String(import.meta.env.VITE_API_URL ?? "");
 
+type Entry = { id: number; name: string; email: string; created_at: string };
 
 export function Welcome() {
+  const [entries, setEntries] = useState<Entry[]>([]);
+  const [error, setError] = useState("");
+
+  async function load() {
+    try {
+      const response = await fetch(`${API_URL}/entries`);
+      if (!response.ok) throw new Error(`Status ${response.status}`);
+      setEntries(await response.json());
+      setError("");
+    } catch (err) {
+      setError(`Could not load entries: ${err}`);
+    }
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const body = new URLSearchParams(new FormData(form) as unknown as Record<string, string>);
+    try {
+      const response = await fetch(`${API_URL}/form`, { method: "POST", body });
+      if (!response.ok) throw new Error(`Status ${response.status}`);
+      form.reset();
+      await load();
+    } catch (err) {
+      setError(`Could not save: ${err}`);
+    }
+  }
+
   return (
     <main className="flex items-center justify-center pt-16 pb-4">
       <div className="flex-1 flex flex-col items-center gap-16 min-h-0">
@@ -44,11 +78,24 @@ export function Welcome() {
             </ul>
           </nav>
           <div>
-            <form method="post" action={`${API_URL}/form`} className="flex flex-col gap-2">
-              <input type="text" name="name" placeholder="Enter your name" autoComplete="name" className="border p-2 rounded w-full" />
-              <input type="email" name="email" placeholder="Enter your email" autoComplete="email" className="border p-2 rounded w-full mt-2" />
+            <form onSubmit={submit} className="flex flex-col gap-2">
+              <input type="text" name="name" required placeholder="Enter your name" autoComplete="name" className="border p-2 rounded w-full" />
+              <input type="email" name="email" required placeholder="Enter your email" autoComplete="email" className="border p-2 rounded w-full mt-2" />
               <button type="submit" className="bg-blue-500 text-white p-2 rounded w-full mt-2">Submit</button>
             </form>
+          </div>
+          <div className="space-y-2">
+            <h2 className="font-semibold text-gray-700 dark:text-gray-200">Saved entries ({entries.length})</h2>
+            {error && <p className="text-red-600 text-sm">{error}</p>}
+            <ul className="space-y-1 text-sm text-gray-700 dark:text-gray-200">
+              {entries.map((entry) => (
+                <li key={entry.id} className="border rounded p-2">
+                  <strong>{entry.name}</strong> ({entry.email})
+                  <br />
+                  <span className="text-xs text-gray-500">{entry.created_at}</span>
+                </li>
+              ))}
+            </ul>
           </div>
         </div>
       </div>

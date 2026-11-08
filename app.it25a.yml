@@ -15,3 +15,5 @@ services:
     build: ./multi-image-test/backend
     port: 3001
     route: { host: "@", path: "/api", strip_prefix: true }
+    volumes: 
+      - "data:/data"         # keeps the SQLite file across updates
