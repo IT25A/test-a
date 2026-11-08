@@ -1,5 +1,3 @@
-# Save as .github/workflows/deploy.yml in your repository. Nothing else is needed besides an
-# entry in IT25A/apps-registry and (optionally) an it25a.yml.
 name: Deploy
 
 on:
@@ -9,12 +7,10 @@ on:
     types: [opened, synchronize, reopened, closed]
   workflow_dispatch:
 
-# One run per pull request (or main) at a time; a new push cancels the old preview run.
 concurrency:
   group: it25a-deploy-${{ github.event.pull_request.number || 'main' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# The reusable workflow can only use permissions that you grant here.
 permissions:
   contents: read
   packages: write       # push images to ghcr.io
