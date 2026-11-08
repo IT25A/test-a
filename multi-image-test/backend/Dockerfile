@@ -17,6 +17,8 @@ RUN npm ci
 RUN mkdir -p /data && chown node:node /data
 ENV DB_PATH=/data/entries.db
 
+USER node
+
 # start app
 EXPOSE 3001
 CMD npm run start
